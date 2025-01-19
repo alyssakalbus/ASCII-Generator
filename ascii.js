@@ -15,34 +15,59 @@ let defaultAscii = [
   { symbol: "^" },
 ];
 
-// Custom Buttons and Sliders
-let swapButton;
+// Buttons and Sliders
+let swapButton, gravityButton;
 let swapColors = false;
-let gridSlider;
-let textSlider;
-let oscSlider;
+let gravityMode = false;
+let gridSlider, textSlider, oscSlider;
 
-// Color Master
+// Gravity
+let fallingCharacters = [];
+const GRAVITY = 0.9;
+const BOUNCE = -0.6;
+const FRICTION = 0.99;
+
+// Color
 let fillColor = [255, 255, 255, 255];
 let bgColor = [0];
 let textColor = [0];
 let textboxColor = [255];
 let textboxStrokeColor = [0];
 
-// Oscillation Parameters
+// Oscillation
 const lowThreshold = 0;
 const highThreshold = 200;
 let speed = (5 * Math.PI) / 5000;
 let oscillationFactor = 0.4;
 
-// User Input Variables
+// User Input
 let userInput = "";
 let inputText = "";
-let defaultText =
-  "Start Typing to Generate. Press 'Enter' to Begin a New String."; // Default text to show before input
+let defaultText = "Start Typing to Generate. Press 'Enter' to Begin a New String.";
 
 function preload() {
   Helvetica = loadFont("helvetica.ttf");
+}
+
+function setup() {
+  createCanvas(1024, 768);
+  pixelDensity(1);
+
+  textFont(Helvetica);
+  textAlign(LEFT, LEFT);
+
+  cam = createCapture(VIDEO);
+  cam.size(512, 384);
+  cam.hide();
+
+  gridSlider = new Slider(20, height - 25, 300, 15, 10, 150, 100);
+  textSlider = new Slider(20, height - 60, 300, 15, 5, 50, 10);
+  oscSlider = new Slider(20, height - 95, 300, 15, 0, 0.8, 0);
+
+  swapButton = new Button(20, height - 145, 100, 20, "Swap Colors");
+  gravityButton = new Button(140, height - 145, 100, 20, "Gravity On/Off");
+
+  frameRate(60);
 }
 
 function updateAscii(input) {
@@ -57,29 +82,6 @@ function updateAscii(input) {
     }
     inputText = input;
   }
-}
-
-function setup() {
-  createCanvas(1024, 768);
-
-  // Text Settings
-  textFont(Helvetica);
-  textAlign(LEFT, LEFT);
-
-  // Camera Input Settings
-  cam = createCapture(VIDEO);
-  cam.size(1024, 768);
-  cam.hide();
-
-  // Sliders and Buttons
-  gridSlider = new Slider(20, height - 25, 300, 15, 10, 150, 100);
-  textSlider = new Slider(20, height - 60, 300, 15, 5, 18, 10);
-  oscSlider = new Slider(20, height - 95, 300, 15, 0, 0.8, 0);
-
-  // Swap Color Button
-  swapButton = new Button(20, height - 145, 100, 20, "Swap Colors");
-
-  frameRate(60);
 }
 
 function swapColorsFunction() {
@@ -162,7 +164,6 @@ class Slider {
     
     noStroke();
 
-    // Knob with Hover
     push();
     strokeWeight(.8);
     stroke(this.hovering ? color(fillColor) : color(bgColor));
@@ -199,6 +200,44 @@ class Slider {
   }
 }
 
+class FallingCharacter {
+  constructor(x, y, symbol, size) {
+    this.x = x;
+    this.y = y;
+    this.symbol = symbol;
+    this.size = size;
+    this.velocityY = 0;
+    this.velocityX = random(-2, 2);
+  }
+
+  update() {
+    this.velocityY += GRAVITY;
+    this.velocityX *= FRICTION;
+    
+    this.x += this.velocityX;
+    this.y += this.velocityY;
+
+    if (this.x < 0 || this.x > width) {
+      this.velocityX *= BOUNCE;
+      this.x = constrain(this.x, 0, width);
+    }
+
+    if (this.y > height) {
+      this.velocityY *= BOUNCE;
+      this.y = height;
+      this.velocityX *= FRICTION;
+    }
+  }
+
+  display(size) {
+    fill(fillColor);
+    noStroke();
+    textSize(size);
+    textAlign(CENTER, CENTER);
+    text(this.symbol, this.x, this.y);
+  }
+}
+
 function draw() {
   background(bgColor);
 
@@ -209,17 +248,92 @@ function draw() {
   oscSlider.update();
 
   count = gridSlider.getValue();
-  textsize = textSlider.getValue(); // Update text size dynamically
+  textsize = textSlider.getValue();
   oscillationFactor = oscSlider.getValue();
 
   let asciiSize = width / count;
   let time = millis();
 
-  // Oscillating factor with threshold
   const oscillation = oscillationFactor * (1 + Math.sin(time * speed));
-  const luminanceOffset =
-    lowThreshold + (highThreshold - lowThreshold) * oscillation;
+  const luminanceOffset = lowThreshold + (highThreshold - lowThreshold) * oscillation;
 
+  if (!gravityMode) {
+    for (let x = 0; x < count; x++) {
+      for (let y = 0; y < count; y++) {
+        let posX = (x + 0.5) * asciiSize;
+        let posY = (y + 0.5) * asciiSize;
+
+        let x2 = floor((x / count) * cam.width);
+        let y2 = floor((y / count) * cam.height);
+        let pixelIndex = (y2 * cam.width + x2) * 4;
+
+        let r = cam.pixels[pixelIndex] || 0;
+        let g = cam.pixels[pixelIndex + 1] || 0;
+        let b = cam.pixels[pixelIndex + 2] || 0;
+
+        let luminance = (r + g + b) / 3;
+        luminance += luminanceOffset;
+
+        let shapeIndex = floor(map(luminance, 0, 255, 0, ascii.length));
+        shapeIndex = constrain(shapeIndex, 0, ascii.length - 1);
+        let shape = ascii[shapeIndex];
+
+        drawShape(posX, posY, asciiSize, shape);
+      }
+    }
+  } else {
+    for (let char of fallingCharacters) {
+      char.update();
+      char.display(textsize);
+    }
+  }
+  drawUI(count, textsize);
+}
+
+function drawUI(count, textsize) {
+  let displayText = userInput.length === 0 ? defaultText : inputText;
+  let textboxWidthAdjustment = displayText.length * 5 + 100;
+  let textboxWidth = constrain(textboxWidthAdjustment, 100, width - 50);
+
+  fill(textboxColor);
+  rectMode(CENTER);
+  rect(width / 2, 30, textboxWidth, 25, 10);
+
+  noStroke();
+  fill(textColor);
+  textSize(12);
+  textAlign(CENTER, CENTER);
+  text(displayText, width / 2, 30);
+
+  rectMode(CORNER);
+
+  swapButton.display();
+  gravityButton.display();
+
+  gridSlider.show();
+  textSlider.show();
+  oscSlider.show();
+
+  fill(fillColor);
+  textSize(12);
+  textAlign(CENTER, CENTER);
+  text("Grid Size: " + count, gridSlider.x + gridSlider.w / 2, height - 40);
+  text("Text Size: " + textsize, textSlider.x + textSlider.w / 2, height - 75);
+  text("Oscillation: " + oscillationFactor.toFixed(2), oscSlider.x + oscSlider.w / 2, height - 110);
+
+}
+
+function drawShape(x, y, asciiSize, shape) {
+  fill(fillColor);
+  noStroke();
+  textSize(textsize);
+  text(shape.symbol, x, y);
+}
+
+function triggerGravity(count, asciiSize) {
+  fallingCharacters = [];
+  cam.loadPixels();
+  
   for (let x = 0; x < count; x++) {
     for (let y = 0; y < count; y++) {
       let posX = (x + 0.5) * asciiSize;
@@ -233,75 +347,33 @@ function draw() {
       let g = cam.pixels[pixelIndex + 1] || 0;
       let b = cam.pixels[pixelIndex + 2] || 0;
 
-      // Luminance calculation
       let luminance = (r + g + b) / 3;
-      luminance += luminanceOffset;
-
       let shapeIndex = floor(map(luminance, 0, 255, 0, ascii.length));
       shapeIndex = constrain(shapeIndex, 0, ascii.length - 1);
-      let shape = ascii[shapeIndex];
-
-      drawShape(posX, posY, asciiSize, shape);
+      
+      fallingCharacters.push(
+        new FallingCharacter(
+          posX,
+          posY,
+          ascii[shapeIndex].symbol,
+          textsize
+        )
+      );
     }
   }
-  
-  let displayText = userInput.length === 0 ? defaultText : inputText;
-
-  // Textbox Dimensions
-  let textboxWidthAdjustment = displayText.length * 5 + 100;
-  let textboxWidth = constrain(textboxWidthAdjustment, 100, width - 50);
-  
-  // Text box
-  fill(textboxColor);
-  rectMode(CENTER);
-  rect(width / 2, 30, textboxWidth, 25, 10);
-
-  // Default and Input Text
-  noStroke();
-  fill(textColor);
-  textSize(12);
-  textAlign(CENTER, CENTER);
-  text(displayText, width / 2, 30);
-
-  // Turn off rectMode for Button
-  rectMode(CORNER);
-
-  // Display Button
-  swapButton.display();
-
-  // Grid Slider
-  gridSlider.show();
-  fill(fillColor);
-  textSize(12);
-  textAlign(CENTER, CENTER);
-  text("Grid Size: " + count, gridSlider.x + gridSlider.w / 2, height - 40);
-
-  // Text Slider
-  textSlider.show();
-  fill(fillColor);
-  textSize(12);
-  textAlign(CENTER, CENTER);
-  text("Text Size: " + textsize, textSlider.x + textSlider.w / 2, height - 75);
-
-  // Osc Slider
-  oscSlider.show();
-  fill(fillColor);
-  textSize(12);
-  textAlign(CENTER, CENTER);
-  text("Oscillation: " + oscillationFactor.toFixed(2), oscSlider.x + oscSlider.w / 2, height - 110);
-}
-
-function drawShape(x, y, asciiSize, shape) {
-  fill(fillColor);
-  noStroke();
-
-  textSize(textsize); // Apply dynamic text size
-  text(shape.symbol, x, y);
 }
 
 function mousePressed() {
   if (swapButton.isClicked()) {
     swapColorsFunction();
+  }
+  if (gravityButton.isClicked()) {
+    if (!gravityMode) {
+      gravityMode = true;
+      triggerGravity(gridSlider.getValue(), width / gridSlider.getValue());
+    } else {
+      gravityMode = false;
+    }
   }
   gridSlider.pressed();
   textSlider.pressed();
